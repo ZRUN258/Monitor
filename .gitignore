@@ -1,0 +1,79 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Editors and IDEs
+.idea/
+.vscode/
+.qtcreator/
+*.pro.user
+*.pro.user.*
+*.qbs.user
+*.qbs.user.*
+CMakeLists.txt.user
+CMakeLists.txt.user.*
+*.swp
+*.swo
+*~
+
+# Qt / qmake generated files
+.qmake.cache
+.qmake.stash
+.qmlls.ini
+Makefile
+Makefile.*
+moc_*.cpp
+moc_predefs.h
+ui_*.h
+qrc_*.cpp
+*_resource.rc
+object_script.*
+compile_commands.json
+*.moc
+*.prl
+*.qmlc
+*.jsc
+*.qm
+
+# Compiler and linker outputs
+*.o
+*.obj
+*.a
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+*.app/
+*.dSYM/
+*.pdb
+*.ilk
+*.idb
+
+# Build directories
+build/
+build-*/
+cmake-build-*/
+debug/
+release/
+.moc/
+.obj/
+.pch/
+.rcc/
+.uic/
+
+# Logs and temporary files
+*.log
+*.tmp
+*.temp
+*.autosave
+*.orig
+*.rej
+core
+*.core
+
+# The teammate UI demo is maintained as its own nested Git repository.
+# Keep it out of the Qt application's repository to avoid an accidental gitlink.
+docs/environment-detection/
