@@ -1,7 +1,9 @@
 #include "mainwindow.h"
 
 #include <QAbstractSocket>
+#include <QApplication>
 #include <QDateTime>
+#include <QFontDatabase>
 #include <QFormLayout>
 #include <QFrame>
 #include <QGridLayout>
@@ -154,7 +156,8 @@ void GaugeWidget::paintEvent(QPaintEvent *) {
     unitFont.setPointSize(12);
     unitFont.setBold(false);
     painter.setFont(unitFont);
-    painter.drawText(ring.adjusted(0, 70, 0, 0), Qt::AlignCenter, m_unit);
+    // 单位文字整体下移，避免与数值重叠
+    painter.drawText(ring.adjusted(0, 88, 0, 0), Qt::AlignCenter, m_unit);
 }
 
 BarChartWidget::BarChartWidget(QWidget *parent) : QWidget(parent) {
@@ -202,24 +205,49 @@ void BarChartWidget::paintEvent(QPaintEvent *) {
 }
 
 TelemetryChart::TelemetryChart(QWidget *parent) : QWidget(parent) {
-    setMinimumHeight(265);
+    setMinimumHeight(300);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
 }
 
 void TelemetryChart::append(double temperature, double humidity) {
+    const qint64 now = QDateTime::currentMSecsSinceEpoch();
+    m_clock.append(now);
     if (!qIsNaN(temperature)) m_temperature.append(temperature);
-    else if (!m_temperature.isEmpty()) m_temperature.append(m_temperature.last());
+    else m_temperature.append(m_temperature.isEmpty() ? 0.0 : m_temperature.last());
     if (!qIsNaN(humidity)) m_humidity.append(humidity);
-    else if (!m_humidity.isEmpty()) m_humidity.append(m_humidity.last());
-    while (m_temperature.size() > kMaxChartPoints) m_temperature.removeFirst();
-    while (m_humidity.size() > kMaxChartPoints) m_humidity.removeFirst();
+    else m_humidity.append(m_humidity.isEmpty() ? 0.0 : m_humidity.last());
+    // 按最大时间窗口裁剪：起点早于 now - 90s 的历史点丢弃
+    const qint64 cutoff = now - kMaxWindowMs;
+    int drop = 0;
+    while (drop < m_clock.size() && m_clock.at(drop) < cutoff) ++drop;
+    if (drop > 0) {
+        m_clock.remove(0, drop);
+        m_temperature.remove(0, drop);
+        m_humidity.remove(0, drop);
+    }
+    // 内存保护：最多保留 kMaxChartPoints 个点
+    while (m_clock.size() > kMaxChartPoints) {
+        m_clock.removeFirst();
+        m_temperature.removeFirst();
+        m_humidity.removeFirst();
+    }
     update();
 }
 
 void TelemetryChart::paintEvent(QPaintEvent *) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    const QRectF plot = rect().adjusted(44, 14, -18, -34);
+    // 左侧纵轴：温度(°C)  右侧纵轴：湿度(%RH)  横轴：时间
+    const QRectF full = rect();
+    // 预留足够边距，保证左右纵轴刻度与横轴时间标签完整显示
+    const QRectF plot = full.adjusted(58, 16, -52, -50);
+    if (plot.width() <= 20 || plot.height() <= 20) return;
+    const QColor kTempColor("#00E5FF");
+    const QColor kHumidColor("#8075FF");
+    const QColor kAxisColor(139, 152, 183);
+    const QFont smallFont(p.font().family(), 11);
+
+    // 网格
     p.setPen(QPen(QColor(255, 255, 255, 18), 1));
     for (int i = 0; i <= 4; ++i) {
         const qreal y = plot.top() + plot.height() * i / 4.0;
@@ -229,41 +257,83 @@ void TelemetryChart::paintEvent(QPaintEvent *) {
         const qreal x = plot.left() + plot.width() * i / 6.0;
         p.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()));
     }
-    p.setPen(QColor(139, 152, 183));
-    p.setFont(QFont(p.font().family(), 11));
-    p.drawText(QRectF(0, plot.top() - 4, 38, 20), Qt::AlignRight, QStringLiteral("100"));
-    p.drawText(QRectF(0, plot.center().y() - 10, 38, 20), Qt::AlignRight, QStringLiteral("50"));
-    p.drawText(QRectF(0, plot.bottom() - 14, 38, 20), Qt::AlignRight, QStringLiteral("0"));
-    p.drawText(QRectF(plot.left(), plot.bottom() + 9, plot.width(), 18), Qt::AlignCenter,
-               QStringLiteral("最近 %1 个采样点").arg(kMaxChartPoints));
+
+    // 左右纵轴刻度（文本框贴合绘图区，避免越界裁剪）
+    p.setFont(smallFont);
+    p.setPen(kTempColor);
+    p.drawText(QRectF(0, plot.top() - 9, plot.left() - 6, 18), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("50°C"));
+    p.drawText(QRectF(0, plot.center().y() - 9, plot.left() - 6, 18), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("25°C"));
+    p.drawText(QRectF(0, plot.bottom() - 9, plot.left() - 6, 18), Qt::AlignRight | Qt::AlignVCenter, QStringLiteral("0°C"));
+    p.setPen(kHumidColor);
+    const qreal rightWidth = full.right() - plot.right() - 4;
+    p.drawText(QRectF(plot.right() + 4, plot.top() - 9, rightWidth, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("%RH"));
+    p.drawText(QRectF(plot.right() + 4, plot.top() + plot.height() / 3.0 - 9, rightWidth, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("66"));
+    p.drawText(QRectF(plot.right() + 4, plot.top() + plot.height() * 2.0 / 3.0 - 9, rightWidth, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("33"));
+    p.drawText(QRectF(plot.right() + 4, plot.bottom() - 9, rightWidth, 18), Qt::AlignLeft | Qt::AlignVCenter, QStringLiteral("0"));
+
+    // 横轴时间标签：窗口从 10 秒起随时间增长，最大 90 秒
+    p.setPen(kAxisColor);
+    p.setFont(smallFont);
+    const int count = m_clock.size();
+    qint64 windowMs = kMinWindowMs;
+    qint64 axisEnd = 0;
+    if (count > 0) {
+        const qint64 first = m_clock.first();
+        const qint64 last = m_clock.last();
+        axisEnd = last;
+        // 实际数据跨度与 10 秒取较大者，上限 90 秒
+        const qint64 dataSpan = last - first;
+        windowMs = qBound(kMinWindowMs, qMax(dataSpan, kMinWindowMs), kMaxWindowMs);
+        axisEnd = qMax(last, first + windowMs);
+    }
+    if (count > 0) {
+        // 横轴不再显示具体时间，居中显示时间窗口长度
+        const qreal labelHeight = 20.0;
+        const qreal available = full.bottom() - plot.bottom();
+        const qreal labelTop = plot.bottom() + qMax<qreal>(3.0, (available - labelHeight) / 2.0);
+        const QString label = QStringLiteral("最近 %1 秒数据")
+                                  .arg(qRound(windowMs / 1000.0));
+        p.drawText(QRectF(plot.left(), labelTop, plot.width(), labelHeight),
+                   Qt::AlignCenter, label);
+    }
+
     if (m_temperature.isEmpty() && m_humidity.isEmpty()) {
-        p.setPen(QColor(139, 152, 183));
+        p.setPen(kAxisColor);
         p.setFont(QFont(p.font().family(), 14));
         p.drawText(plot, Qt::AlignCenter, QStringLiteral("等待实时数据流…"));
         return;
     }
-    auto drawSeries = [&](const QVector<double> &values, QColor color, double min, double max) {
-        if (values.isEmpty()) return;
+
+    auto drawSeries = [&](const QVector<double> &values, QColor color, double min, double max,
+                          const QVector<qint64> &clock, bool withArea) {
+        if (values.isEmpty() || windowMs <= 0) return;
+        const qint64 axisStart = axisEnd - windowMs;
+        const qreal unit = plot.width() / qreal(windowMs);
         QPainterPath line;
+        qreal lastX = plot.left();
         for (int i = 0; i < values.size(); ++i) {
-            const qreal x = plot.left() + plot.width() * i / qMax(1, kMaxChartPoints - 1);
+            const qreal x = plot.left() + (clock.at(i) - axisStart) * unit;
             const qreal normalized = qBound(0.0, (values[i] - min) / (max - min), 1.0);
             const qreal y = plot.bottom() - plot.height() * normalized;
-            if (i == 0) line.moveTo(x, y); else line.lineTo(x, y);
+            if (x < plot.left()) continue;
+            if (line.elementCount() == 0) line.moveTo(x, y); else line.lineTo(x, y);
+            lastX = x;
         }
-        QPainterPath area = line;
-        area.lineTo(plot.left() + plot.width() * (values.size() - 1) / qMax(1, kMaxChartPoints - 1), plot.bottom());
-        area.lineTo(plot.left(), plot.bottom());
-        QLinearGradient fill(0, plot.top(), 0, plot.bottom());
-        QColor top = color; top.setAlpha(70);
-        QColor bottom = color; bottom.setAlpha(0);
-        fill.setColorAt(0, top); fill.setColorAt(1, bottom);
-        p.fillPath(area, fill);
+        if (withArea) {
+            QPainterPath area = line;
+            area.lineTo(lastX, plot.bottom());
+            area.lineTo(plot.left(), plot.bottom());
+            QLinearGradient fill(0, plot.top(), 0, plot.bottom());
+            QColor top = color; top.setAlpha(70);
+            QColor bottom = color; bottom.setAlpha(0);
+            fill.setColorAt(0, top); fill.setColorAt(1, bottom);
+            p.fillPath(area, fill);
+        }
         p.setPen(QPen(color, 2.2, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
         p.drawPath(line);
     };
-    drawSeries(m_humidity, QColor("#6A5CFF"), 0.0, 100.0);
-    drawSeries(m_temperature, QColor("#00E5FF"), 0.0, 50.0);
+    drawSeries(m_humidity, kHumidColor, 0.0, 100.0, m_clock, false);
+    drawSeries(m_temperature, kTempColor, 0.0, 50.0, m_clock, true);
 }
 
 MainWindow::MainWindow(QWidget *parent) : QMainWindow(parent) {
@@ -460,6 +530,16 @@ QWidget *MainWindow::createAirQualityPanel(QWidget *parent) {
     });
     layout->addWidget(toggle, 0, Qt::AlignLeft);
     layout->addWidget(details);
+
+    // 右下角：运行时间不足 6 小时时的测量误差提示
+    m_airWarmupHint = new QLabel(QStringLiteral("当前运行时间过短，测量误差极大"));
+    m_airWarmupHint->setObjectName(QStringLiteral("airWarmupHint"));
+    m_airWarmupHint->setWordWrap(false);
+    m_airWarmupHint->setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    m_airWarmupHint->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    layout->addWidget(m_airWarmupHint, 0, Qt::AlignRight);
+    updateAirWarmupHint();
+
     layout->addStretch();
     return content;
 }
@@ -551,9 +631,9 @@ QWidget *MainWindow::createOverviewPage() {
     m_motionLabel = new QLabel(QStringLiteral("○  空间状态等待检测"));
     m_motionLabel->setObjectName(QStringLiteral("motionHero"));
     m_motionDetail = mutedLabel(QStringLiteral("PIR · 暂无数据"));
-    m_accelLabel = new QLabel(QStringLiteral("ACC\n--  /  --  /  --"));
+    m_accelLabel = new QLabel(QStringLiteral("三轴加速度\n--  /  --  /  --"));
     m_accelLabel->setObjectName(QStringLiteral("vectorValue"));
-    m_gyroLabel = mutedLabel(QStringLiteral("GYRO   --  /  --  /  --"));
+    m_gyroLabel = mutedLabel(QStringLiteral("三轴角速度   --  /  --  /  --"));
     motionLayout->addWidget(m_motionLabel);
     motionLayout->addWidget(m_motionDetail);
     motionLayout->addStretch();
@@ -740,6 +820,17 @@ QWidget *MainWindow::createPanel(const QString &title, QWidget *content) {
 }
 
 void MainWindow::applyTheme() {
+    // 全局字体统一为黑体（SimHei），缺失时回退到系统中文字体
+    const QStringList available = QFontDatabase().families();
+    QString family = QStringLiteral("SimHei");
+    if (!available.contains(family)) {
+        for (const QString &fallback : {QStringLiteral("Microsoft YaHei"), QStringLiteral("Noto Sans CJK SC")}) {
+            if (available.contains(fallback)) { family = fallback; break; }
+        }
+    }
+    QFont appFont(family);
+    appFont.setPointSize(10);
+    qApp->setFont(appFont);
     setStyleSheet(QStringLiteral(R"(
         QMainWindow, QWidget#root { background: #06101F; color: #F4F7FF; }
         QFrame#sidebar { background: rgba(8, 20, 39, 245); border: 1px solid #172B4D; border-radius: 18px; }
@@ -787,6 +878,7 @@ void MainWindow::applyTheme() {
         QLabel#airLevelText[level="poor"] { color: #FF8A3D; }
         QLabel#airLevelText[level="unhealthy"] { color: #FF6B7A; }
         QLabel#airAdvice { color: #B8C4DB; font-size: 15px; }
+        QLabel#airWarmupHint { color: #FFC13B; background: #33280F; border: 1px solid #7A6021; border-radius: 8px; padding: 5px 10px; font-size: 13px; font-weight: 700; }
         QPushButton#airToggle { color: #00DDF9; background: transparent; border: none; padding: 4px 0; font-size: 15px; font-weight: 700; text-align: left; }
         QPushButton#airToggle:hover { color: #7DF2FF; }
         QFrame#airDetails { background: #08172C; border: 1px solid #173255; border-radius: 10px; }
@@ -1001,8 +1093,8 @@ void MainWindow::updateMetric(const QString &sensor, const QString &field, doubl
         static double ax = 0, ay = 0, az = 0, gx = 0, gy = 0, gz = 0;
         if (field == "ax") ax = value; else if (field == "ay") ay = value; else if (field == "az") az = value;
         else if (field == "gx") gx = value; else if (field == "gy") gy = value; else if (field == "gz") gz = value;
-        m_accelLabel->setText(QStringLiteral("ACC\n%1  /  %2  /  %3").arg(ax, 0, 'f', 1).arg(ay, 0, 'f', 1).arg(az, 0, 'f', 1));
-        m_gyroLabel->setText(QStringLiteral("GYRO   %1  /  %2  /  %3").arg(gx, 0, 'f', 1).arg(gy, 0, 'f', 1).arg(gz, 0, 'f', 1));
+        m_accelLabel->setText(QStringLiteral("三轴加速度\n%1  /  %2  /  %3").arg(ax, 0, 'f', 1).arg(ay, 0, 'f', 1).arg(az, 0, 'f', 1));
+        m_gyroLabel->setText(QStringLiteral("三轴角速度   %1  /  %2  /  %3").arg(gx, 0, 'f', 1).arg(gy, 0, 'f', 1).arg(gz, 0, 'f', 1));
     }
     addTableRow(timestamp, sensor, field, QString::number(value, 'f', qAbs(value) >= 100 ? 0 : 2));
 }
@@ -1128,4 +1220,15 @@ void MainWindow::updateClock() {
     }
     if (m_lastFrameAt > 0 && now.toMSecsSinceEpoch() - m_lastFrameAt > 10000 && !m_clients.isEmpty())
         m_connectionDetail->setText(QStringLiteral("设备在线，但超过 10 秒未收到新数据"));
+    updateAirWarmupHint();
+}
+
+void MainWindow::updateAirWarmupHint() {
+    if (!m_airWarmupHint) return;
+    // 运行时间不足 6 小时时提示测量误差偏大，超过后自动隐藏
+    constexpr qint64 kWarmupMs = 6LL * 60 * 60 * 1000;
+    const qint64 elapsed = m_startedAt > 0
+                               ? QDateTime::currentMSecsSinceEpoch() - m_startedAt
+                               : 0;
+    m_airWarmupHint->setVisible(elapsed < kWarmupMs);
 }

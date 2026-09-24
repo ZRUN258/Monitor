@@ -78,6 +78,10 @@ protected:
 private:
     QVector<double> m_temperature;
     QVector<double> m_humidity;
+    QVector<qint64> m_clock;
+    // 横轴时间窗口：从 10 秒开始随数据积累动态增长，最大 90 秒
+    static constexpr qint64 kMinWindowMs = 10 * 1000;             // 10 秒
+    static constexpr qint64 kMaxWindowMs = 90 * 1000;             // 90 秒
 };
 
 class MainWindow : public QMainWindow {
@@ -108,6 +112,7 @@ private:
     void addTableRow(qint64 timestamp, const QString &sensor, const QString &field, const QString &value);
     QString localAddressSummary() const;
     void updateClock();
+    void updateAirWarmupHint();
 
     QWebSocketServer *m_server = nullptr;
     QList<QWebSocket *> m_clients;
@@ -129,6 +134,7 @@ private:
     QLabel *m_airLevelBadge = nullptr;
     QLabel *m_airAdvice = nullptr;
     QLabel *m_airLevel = nullptr;
+    QLabel *m_airWarmupHint = nullptr;
     QWidget *m_airScale = nullptr;
     QWidget *m_airScaleMarker = nullptr;
     QLabel *m_lightChannels = nullptr;
